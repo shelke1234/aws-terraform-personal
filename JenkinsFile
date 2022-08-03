@@ -1,0 +1,152 @@
+import groovy.json.JsonSlurper
+pipeline{
+    agent any
+    tools {
+        terraform 'terraform'
+    }
+    parameters{
+        choice (name:'region',
+                choices:['eu-west-1','ap-south-1'])
+        choice (name:'apply',
+                choices:['no',  'yes'])
+        choice (name:'destroy',
+                choices:['no',  'yes'])
+        choice (name:'jenkins_environment',
+                choices:['NewVision','CoreCard'])
+        choice (name:'ip_address_type',
+                choices:['ipv4','dualstack'])        
+        string (name: 'web_vpc_name', defaultValue: 'Webserver_VPC', description: 'Tag name value for webserver VPC, default is Webserver_VPC')
+        string (name: 'bas_snet_name', defaultValue: '*BastionHost_Public_Subnet*', description: 'Tag name value for webserver subnet default is *BastionHost_Public_Subnet*')
+        string (name: 'web_sg_name', defaultValue: 'Webserver_sg', description: 'Tag name value for webserver sg default is Webserver_sg')
+        string (name: 'webservers', defaultValue: '*CCWEB*', description: 'Tag name value for webserver EC2 instances default is *CCWEB*')
+        string (name: 'internal', defaultValue: 'false', description: 'Boolean determining if the load balancer is internal(value : true) or externally facing(value : false) the default value is false')
+        string (name: 'backend_protocol_1', defaultValue: 'HTTP', description: 'Target Group 1 Protocol default is HTTP')
+        string (name: 'backend_port_1', defaultValue: '80', description: 'Target Group 1 Port default is 80')
+        string (name: 'target_id', defaultValue: ' "10.0.0.26","10.0.0.86" ', description: 'Target Register default Ip is "10.0.0.26","10.0.0.86"(ip should be in double inverted comma)')
+        string (name: 'backend_port_2', defaultValue: '443', description: 'Target Group 2 Port default is 443')
+        string (name: 'prov_region', defaultValue: 'eu-west-1', description: 'prov_region, default prov_region value is eu-west-1')
+        string (name: 'backend_protocol_2', defaultValue: 'HTTPS', description: 'Target Group 2 Protocol default value is HTTPS')
+    }
+
+environment {
+    ACCESS_KEY_ID = credentials('AWS_ACCESS_KEY1')
+    SECRET_KEY = credentials('AWS_SECRET_KEY1')
+}
+    stages {
+        stage ("Checkout") {
+            steps {
+             git branch: 'master',
+             credentialsId: 'd8a3fa03-76d8-4907-9265-03c0e291ffa3',
+             url: 'https://github.com/ShanilN/cc_infra_code_base.git'
+            }
+        }
+
+        stage("Initializing Terraform - NV") {
+            when {
+                expression { 
+                    params.jenkins_environment == 'NewVision'
+                 }
+            }
+            steps {
+                sh ' cd ./cc_aws_alb_cc_service; terraform version; pwd; rm -rf .terraform*;  terraform init \
+                -backend-config="bucket=cc-terraform-state-network" \
+                -backend-config="key=alb_cc_service/terraform.tfstate" \
+                -backend-config="region=${region}" \
+                -backend-config="access_key=${ACCESS_KEY_ID}" \
+                -backend-config="secret_key=${SECRET_KEY}" \
+                -var "prov_region=${prov_region}"'
+            }
+        }
+        stage("Initializing Terraform - CC") {
+            when {
+                expression { 
+                    params.jenkins_environment == 'CoreCard'
+                 }
+            }
+            steps {
+               sh ' cd ./cc_aws_alb_cc_service; terraform version; pwd; rm -rf .terraform*;  terraform init \
+                -backend-config="bucket=ccnv-awsproject-pipeline" \
+                -backend-config="key=alb_cc_service/terraform.tfstate" \
+                -backend-config="region=${region}" \
+                -backend-config="access_key=${ACCESS_KEY_ID}" \
+                -backend-config="secret_key=${SECRET_KEY}" \
+                -var "prov_region=${prov_region}"'
+            }
+        }
+
+        stage("Planning Architectural Creation's ") {
+            steps {
+                script {
+
+                
+                sh '''   cd ./cc_aws_alb_cc_service; pwd; terraform plan \
+                -var "prov_region=${prov_region}" \
+                -var "web_vpc_name=${web_vpc_name}" \
+                -var "bas_snet_name=${bas_snet_name}" \
+                -var "web_sg_name=${web_sg_name}" \
+                -var "webservers=${webservers}" \
+                -var "internal=${internal}" \
+                -var "backend_protocol_1=${backend_protocol_1}" \
+                -var "backend_port_1=${backend_port_1}" \
+                -var "target_id=[${target_id}]" \
+                -var "backend_protocol_2=${backend_protocol_2}" \
+                -var "backend_port_2=${backend_port_2}" \
+                -var "access_key=${ACCESS_KEY_ID}" \
+                -var "ip_address_type=${ip_address_type}" \
+                -var "secret_key=${SECRET_KEY}" ''' 
+                }
+            }
+        }
+
+        stage("Terraform creating the Infrastructure") {
+            when {
+                expression { 
+                    params.apply == 'yes'
+                 }
+            }
+            steps {
+                sh '''  cd ./cc_aws_alb_cc_service; pwd; terraform apply \
+                -auto-approve \
+                -var "prov_region=${prov_region}" \
+                -var "web_vpc_name=${web_vpc_name}" \
+                -var "bas_snet_name=${bas_snet_name}" \
+                -var "web_sg_name=${web_sg_name}" \
+                -var "webservers=${webservers}" \
+                -var "internal=${internal}" \
+                -var "backend_protocol_1=${backend_protocol_1}" \
+                -var "backend_port_1=${backend_port_1}" \
+                -var "target_id=[${target_id}]" \
+                -var "backend_protocol_2=${backend_protocol_2}" \
+                -var "backend_port_2=${backend_port_2}" \
+                -var "access_key=${ACCESS_KEY_ID}" \
+                -var "ip_address_type=${ip_address_type}" \
+                -var "secret_key=${SECRET_KEY}" '''
+              }
+        }
+       stage("Destroying the created Infrastructure"){
+           when {
+                expression { 
+                    params.destroy == 'yes'
+                 }
+            }
+            steps{
+                sh ''' cd ./cc_aws_alb_cc_service; pwd; terraform destroy \
+                -auto-approve \
+                -var "prov_region=${prov_region}" \
+                -var "web_vpc_name=${web_vpc_name}" \
+                -var "bas_snet_name=${bas_snet_name}" \
+                -var "web_sg_name=${web_sg_name}" \
+                -var "webservers=${webservers}" \
+                -var "internal=${internal}" \
+                -var "backend_protocol_1=${backend_protocol_1}" \
+                -var "backend_port_1=${backend_port_1}" \
+                -var "target_id=[${target_id}]" \
+                -var "backend_protocol_2=${backend_protocol_2}" \
+                -var "backend_port_2=${backend_port_2}" \
+                -var "access_key=${ACCESS_KEY_ID}" \
+                -var "ip_address_type=${ip_address_type}" \
+                -var "secret_key=${SECRET_KEY}" '''
+            }
+        } 
+    }
+}
